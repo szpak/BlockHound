@@ -12,56 +12,45 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
-import reactor.blockhound.integration.BlockHoundIntegration;
+import reactor.blockhound.util.JmhIntegration;
 
-import javax.swing.text.html.Option;
 import java.util.OptionalInt;
-import java.util.ServiceLoader;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import static java.util.concurrent.Executors.newSingleThreadExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static reactor.blockhound.BlockHound.builder;
-import static reactor.core.scheduler.ReactorThreadFactoryDelegatorUtil.createNonBlockingThreadFactory;
+import static reactor.blockhound.util.JmhThreadFactory.blockingNotAllowedThreadFactory;
 
 @SuppressWarnings({"WeakerAccess"})
 //quick settings for IDE - overridden in Gradle configuration
-@Warmup(iterations = 1)
-@Measurement(iterations = 1)
-@Fork(1)
+@Warmup(iterations = 2)
+@Measurement(iterations = 3)
+@Fork(3)
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.AverageTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 public class BlockHoundBlockingNotAllowedThreadBenchmark {
 
-    String fuzzier = "foo";
-    int intFuzzier = 42;
+    int fuzzier = 42;
     ExecutorService blockingNotAllowedSingleThreadExecutor;
 
-    Callable<String> slightlyBlockingCallable = () -> {
-        DummyBlocking.dummyBlocking();
-        return fuzzier;
-    };
+    @SuppressWarnings({"OptionalGetWithoutIsPresent"})
+    Callable<Integer> dummyBlockingCallable = () -> DummyBlocking.dummyBlocking(fuzzier).getAsInt();
 
-    //TODO: Report that doesn't work with method reference :)
-    @SuppressWarnings({"OptionalGetWithoutIsPresent", "Convert2MethodRef"})
-    Callable<Integer> artificialBlockingCallable = () -> DummyBlocking.dummyBlockingInt(intFuzzier).getAsInt();
-
+    //Separate class to be allow to whitelist in some tests
     public static class DummyBlocking {
-        public static void dummyBlocking() {
-            Thread.yield();
-        }
-        public static OptionalInt dummyBlockingInt(int value) {
+        public static OptionalInt dummyBlocking(int value) {
             return OptionalInt.of(value);    //our artificial blocking method call
         }
     }
 
     @Setup(Level.Iteration)
     public void createObjectWithNonBlockingExecution() {
-        blockingNotAllowedSingleThreadExecutor = Executors.newSingleThreadExecutor(createNonBlockingThreadFactory());
+        blockingNotAllowedSingleThreadExecutor = newSingleThreadExecutor(blockingNotAllowedThreadFactory());
     }
 
     @TearDown(Level.Iteration)
@@ -83,24 +72,18 @@ public class BlockHoundBlockingNotAllowedThreadBenchmark {
         }
 
         protected void configureBuilder(BlockHound.Builder builder) {
-            ServiceLoader<BlockHoundIntegration> serviceLoader = ServiceLoader.load(BlockHoundIntegration.class);
-            serviceLoader.stream().map(ServiceLoader.Provider::get).sorted().forEach(builder::with);
+            builder.with(new JmhIntegration());
 
-//            builder.markAsBlocking("reactor.blockhound.BlockHoundBlocking2Benchmark$DummyBlocking", "dummyBlocking", "()V");  //TODO: Broken: https://github.com/reactor/BlockHound/issues/39
+//            builder.markAsBlocking("reactor.blockhound.BlockHoundBlockingNotAllowedThreadBenchmark$DummyBlocking", "dummyBlocking", "()Ljava/util/OptionalInt;");  //TODO: Broken: https://github.com/reactor/BlockHound/issues/39
             builder.markAsBlocking(OptionalInt.class, "of", "(I)Ljava/util/OptionalInt;");
-
-//            builder.allowBlockingCallsInside("java.util.concurrent.locks.ReentrantLock$Sync", "tryRelease");
-//            builder.allowBlockingCallsInside("java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject", "await");
-//            builder.allowBlockingCallsInside("java.util.concurrent.ThreadPoolExecutor$Worker", "run");
+            builder.markAsBlocking(OptionalInt.class, "empty", "()Ljava/util/OptionalInt;");
 
             //Due to: https://github.com/reactor/BlockHound/issues/38
             builder.allowBlockingCallsInside("java.util.concurrent.ThreadPoolExecutor", "getTask");
 
             builder.blockingMethodCallback(bm -> {
                 if (detectedCallsCounter == 0) {
-                    System.out.println("Blocking method: " + bm.toString());
-//                    System.err.println(Thread.currentThread().toString());
-//                    new Error(bm.toString()).printStackTrace();
+                    System.out.println(Thread.currentThread().toString() + ": Blocking method: " + bm.toString());
                 }
                 detectedCallsCounter++;
             });
@@ -118,7 +101,6 @@ public class BlockHoundBlockingNotAllowedThreadBenchmark {
         protected void configureBuilder(BlockHound.Builder builder) {
             super.configureBuilder(builder);
             builder.allowBlockingCallsInside("reactor.blockhound.BlockHoundBlockingNotAllowedThreadBenchmark$DummyBlocking", "dummyBlocking");
-            builder.allowBlockingCallsInside("reactor.blockhound.BlockHoundBlockingNotAllowedThreadBenchmark$DummyBlocking", "dummyBlockingInt");
         }
 
         @TearDown(Level.Iteration)
@@ -132,9 +114,8 @@ public class BlockHoundBlockingNotAllowedThreadBenchmark {
         @Override
         protected void configureBuilder(BlockHound.Builder builder) {
             super.configureBuilder(builder);
+            //Note: class.getCanonicalName() doesn't work due to $
             builder.disallowBlockingCallsInside("reactor.blockhound.BlockHoundBlockingNotAllowedThreadBenchmark$DummyBlocking", "dummyBlocking");
-            builder.disallowBlockingCallsInside("reactor.blockhound.BlockHoundBlockingNotAllowedThreadBenchmark$DummyBlocking", "dummyBlockingInt");
-            //TODO: class.getCanonicalName() doesn't work due to $
         }
 
         @TearDown(Level.Iteration)
@@ -143,27 +124,23 @@ public class BlockHoundBlockingNotAllowedThreadBenchmark {
         }
     }
 
-    //TODO: baselineBlockingCallInNonBlockingThread
-//    @Benchmark
-    public String baselineBlockingCall() throws ExecutionException, InterruptedException {
-//        return blockingNotAllowedSingleThreadExecutor.submit(slightlyBlockingCallable).get();
-        return blockingNotAllowedSingleThreadExecutor.submit(artificialBlockingCallable).get() + "";
+    @Benchmark
+    public int baselineBlockingCall() throws ExecutionException, InterruptedException {
+        return blockingNotAllowedSingleThreadExecutor.submit(dummyBlockingCallable).get();
     }
 
 //    @Benchmark    //TODO: Problematic in implementation as ThreadPoolExecutor itself contains blocking code - https://github.com/reactor/BlockHound/issues/38
-//    public String measureNoBlockingCall(BlockHoundWithAllowedYieldInstalled state) throws ExecutionException, InterruptedException {
-//        return blockingNotAllowedSingleThreadExecutor.submit(nonBlockingCallable).get() + "";
+//    public int measureNoBlockingCall(BlockHoundWithAllowedYieldInstalled state) throws ExecutionException, InterruptedException {
+//        return blockingNotAllowedSingleThreadExecutor.submit(nonBlockingCallable).get();
 //    }
 
-//    @Benchmark
-    public String measureAllowedBlockingCall(BlockHoundWithAllowedYieldInstalled state) throws ExecutionException, InterruptedException {
-//        return blockingNotAllowedSingleThreadExecutor.submit(slightlyBlockingCallable).get();
-        return blockingNotAllowedSingleThreadExecutor.submit(artificialBlockingCallable).get() + "";
+    @Benchmark
+    public int measureAllowedBlockingCall(BlockHoundWithAllowedYieldInstalled state) throws ExecutionException, InterruptedException {
+        return blockingNotAllowedSingleThreadExecutor.submit(dummyBlockingCallable).get();
     }
 
     @Benchmark
-    public String measureDisallowedBlockingCall(BlockHoundWithNotAllowedYieldInstalled state) throws ExecutionException, InterruptedException {
-//        return blockingNotAllowedSingleThreadExecutor.submit(slightlyBlockingCallable).get();
-        return blockingNotAllowedSingleThreadExecutor.submit(artificialBlockingCallable).get() + "";
+    public int measureDisallowedBlockingCall(BlockHoundWithNotAllowedYieldInstalled state) throws ExecutionException, InterruptedException {
+        return blockingNotAllowedSingleThreadExecutor.submit(dummyBlockingCallable).get();
     }
 }

@@ -12,36 +12,38 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
+import reactor.blockhound.util.JmhIntegration;
 
+import java.util.OptionalInt;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import static reactor.core.scheduler.ReactorThreadFactoryDelegatorUtil.createBlockingFriendlyThreadFactory;
+import static org.assertj.core.api.Assertions.assertThat;
+import static reactor.blockhound.BlockHound.builder;
+import static reactor.blockhound.util.JmhThreadFactory.blockingAllowedThreadFactory;
 
 @SuppressWarnings("WeakerAccess")
 //quick settings for IDE - overridden in Gradle configuration
-@Warmup(iterations = 2)
+@Warmup(iterations = 1)
 @Measurement(iterations = 3)
-@Fork(3)
+@Fork(2)
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.AverageTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 public class BlockHoundBlockingAllowedThreadBenchmark {
 
-    String fuzzier = "foo";
+    int fuzzier = 42;
     ExecutorService blockingAllowedSingleThreadExecutor;
 
-    Callable<String> slightlyBlockingCallable = () -> {
-        Thread.yield();
-        return fuzzier;
-    };
+    Callable<Integer> dummyBlockingCallable = () -> OptionalInt.of(fuzzier).getAsInt();
+    Callable<Integer> nonBlockingCallable = () -> fuzzier;
 
     @Setup(Level.Iteration)
     public void createObjectWithNonBlockingExecution() {
-        blockingAllowedSingleThreadExecutor = Executors.newSingleThreadExecutor(createBlockingFriendlyThreadFactory());
+        blockingAllowedSingleThreadExecutor = Executors.newSingleThreadExecutor(blockingAllowedThreadFactory());
     }
 
     @TearDown(Level.Iteration)
@@ -51,41 +53,47 @@ public class BlockHoundBlockingAllowedThreadBenchmark {
 
     @State(Scope.Benchmark)
     public static class BlockHoundInstalledState {
+        int detectedCallsCounter;
+
         @Setup
         public void prepare() {
             System.out.println("Debug: Installing Block Hound");
-            BlockHound.install();
+            BlockHound.Builder builder = builder();
+            builder.with(new JmhIntegration());
+            builder.allowBlockingCallsInside("java.util.concurrent.ThreadPoolExecutor", "getTask"); //Due to: https://github.com/reactor/BlockHound/issues/38
+            builder.markAsBlocking(OptionalInt.class, "of", "(I)Ljava/util/OptionalInt;");
+            builder.blockingMethodCallback(bm -> {
+                if (detectedCallsCounter == 0) {
+                    System.out.println(Thread.currentThread().toString() + ": Blocking method: " + bm.toString());
+                }
+                detectedCallsCounter++;
+            });
+            builder.install();
+        }
+
+        @TearDown(Level.Iteration)
+        public void assertDetections() {
+            assertThat(detectedCallsCounter).describedAs("Unexpected blocking calls detected").isZero();
         }
     }
 
     @Benchmark  //not fully reliable as executor call is internally blocking: https://github.com/reactor/BlockHound/issues/38
-    public String baselineNonBlockingCall() throws ExecutionException, InterruptedException {
-        return blockingAllowedSingleThreadExecutor.submit(() -> fuzzier).get();
+    public int baselineNonBlockingCall() throws ExecutionException, InterruptedException {
+        return blockingAllowedSingleThreadExecutor.submit(nonBlockingCallable).get();
     }
 
     @Benchmark
-    public String measureNonBlockingCall(BlockHoundInstalledState state) throws ExecutionException, InterruptedException {
-        return blockingAllowedSingleThreadExecutor.submit(() -> fuzzier).get();
+    public int measureNonBlockingCall(BlockHoundInstalledState state) throws ExecutionException, InterruptedException {
+        return blockingAllowedSingleThreadExecutor.submit(nonBlockingCallable).get();
     }
 
     @Benchmark
-    public String baselineNonBlockingSimpleCall() {
-        return fuzzier;
+    public int baselineBlockingCall() throws ExecutionException, InterruptedException {
+        return blockingAllowedSingleThreadExecutor.submit(dummyBlockingCallable).get();
     }
 
     @Benchmark
-    public String measureNonBlockingSimpleCall(BlockHoundInstalledState state) {
-        return fuzzier;
+    public int measureBlockingCall(BlockHoundInstalledState state) throws ExecutionException, InterruptedException {
+        return blockingAllowedSingleThreadExecutor.submit(dummyBlockingCallable).get();
     }
-
-    @Benchmark
-    public String baselineBlockingCall() throws ExecutionException, InterruptedException {
-        return blockingAllowedSingleThreadExecutor.submit(slightlyBlockingCallable).get();
-    }
-
-    @Benchmark
-    public String measureBlockingCall(BlockHoundInstalledState state) throws ExecutionException, InterruptedException {
-        return blockingAllowedSingleThreadExecutor.submit(slightlyBlockingCallable).get();
-    }
-
 }
