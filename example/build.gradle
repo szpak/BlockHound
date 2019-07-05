@@ -38,7 +38,8 @@ task testReactor3_3_x(type: Test) {
 check.dependsOn(testReactor3_3_x)
 
 dependencies {
-    testCompile project(path: ":agent", configuration: 'shadow')
+//    testCompile project(path: ":agent", configuration: 'shadow')
+    testCompile 'io.projectreactor.tools:blockhound:1.0.0.M4'   //TODO
     testCompile 'io.projectreactor:reactor-core:3.2.2.RELEASE'
     testCompile 'io.reactivex.rxjava2:rxjava:2.2.5'
 
@@ -49,9 +50,19 @@ dependencies {
         changing = true
     }
 
-    jmh project(path: ":agent", configuration: 'shadow')
-    //Uncomment for benchmark execution by Idea plugin
-//    jmh "org.openjdk.jmh:jmh-generator-annprocess:1.21"
+//    jmh project(path: ":agent", configuration: 'shadow')
+    jmh 'io.projectreactor.tools:blockhound:1.0.0.M4'   //TODO
+
+//    jmhTestCompile configurations.testCompile
+//    jmhTestRuntime configurations.testRuntime
+
+    jmh 'io.projectreactor:reactor-core:3.2.2.RELEASE'
+    jmh 'io.reactivex.rxjava2:rxjava:2.2.5'
+    jmh 'junit:junit:4.12'
+    jmh 'org.assertj:assertj-core:3.11.1'
+
+    //Uncomment for benchmark execution by Idea plugin (breaks Gradle by generatic classes twice)
+    jmh "org.openjdk.jmh:jmh-generator-annprocess:1.21"
 }
 
 jmh {
