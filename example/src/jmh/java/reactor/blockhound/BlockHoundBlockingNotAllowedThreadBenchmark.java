@@ -43,7 +43,7 @@ import static reactor.blockhound.util.JmhThreadFactory.blockingNotAllowedThreadF
 @SuppressWarnings({"WeakerAccess"})
 //quick settings for IDE - overridden in Gradle configuration
 @Warmup(iterations = 2)
-@Measurement(iterations = 3)
+@Measurement(iterations = 5)
 @Fork(3)
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.AverageTime})
