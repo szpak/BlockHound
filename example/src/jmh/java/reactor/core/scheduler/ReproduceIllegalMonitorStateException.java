@@ -1,6 +1,7 @@
 package reactor.core.scheduler;
 
 import reactor.blockhound.BlockHound;
+import reactor.blockhound.util.JmhThreadFactory;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -8,13 +9,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 
+@Deprecated(forRemoval = true)
 public class ReproduceIllegalMonitorStateException {
 
     public static void main(String[] args) throws ExecutionException, InterruptedException {
         ThreadFactory blockingUnfriendlyThreadFactory = new ReactorThreadFactory("blocking-unfriendly", new AtomicLong(), false, true,
                 (t, e) -> e.printStackTrace());
 
-        ThreadFactory myThreadFactory = new MyThreadFactory();
+        ThreadFactory myThreadFactory = JmhThreadFactory.blockingNotAllowedThreadFactory();
 
 //        ExecutorService executor = Executors.newSingleThreadExecutor(blockingUnfriendlyThreadFactory);
         ExecutorService executor = Executors.newSingleThreadExecutor(myThreadFactory);
